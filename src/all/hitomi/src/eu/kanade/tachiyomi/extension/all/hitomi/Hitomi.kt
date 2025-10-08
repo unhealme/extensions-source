@@ -144,6 +144,10 @@ class Hitomi(
         coroutineScope {
             var sortBy: Pair<String?, String> = Pair(null, "index")
             var random = false
+            var ascending = false
+            var queryMode = QueryMode.AND
+            var tagSep = ","
+            val tagFilters = mutableListOf<TextFilter>()
 
             val terms = query
                 .trim()
@@ -153,9 +157,10 @@ class Hitomi(
 
             filters.forEach {
                 when (it) {
-                    is SelectFilter -> {
+                    is SortFilter -> {
                         sortBy = Pair(it.getArea(), it.getValue())
-                        random = (it.vals[it.state].first == "Random")
+                        random = (it.vals[it.state!!.index].first == "Random")
+                        ascending = it.state!!.ascending
                     }
 
                     is TypeFilter -> {
@@ -169,20 +174,29 @@ class Hitomi(
 
                     is TextFilter -> {
                         if (it.state.isNotEmpty()) {
-                            terms += it.state.split(",").filter(String::isNotBlank).map { tag ->
-                                val trimmed = tag.trim()
-                                buildString {
-                                    if (trimmed.startsWith('-')) {
-                                        append("-")
-                                    }
-                                    append(it.type)
-                                    append(":")
-                                    append(trimmed.lowercase().removePrefix("-"))
-                                }
+                            when (it.type) {
+                                "sep" -> tagSep = it.state
+                                else -> tagFilters += it
                             }
                         }
                     }
+
+                    is QueryModeFilter -> queryMode = it.values[it.state]
                     else -> {}
+                }
+            }
+
+            for (tags in tagFilters) {
+                terms += tags.state.split(tagSep).filter(String::isNotBlank).map { tag ->
+                    val trimmed = tag.trim()
+                    buildString {
+                        if (trimmed.startsWith('-')) {
+                            append("-")
+                        }
+                        append(tags.type)
+                        append(":")
+                        append(trimmed.lowercase().removePrefix("-"))
+                    }
                 }
             }
 
@@ -200,6 +214,7 @@ class Hitomi(
                     positiveTerms.push(term)
                 }
             }
+            positiveTerms.sortBy { if (it.contains(':')) 0 else 1 }
 
             val positiveResults = positiveTerms.map {
                 async {
@@ -230,8 +245,11 @@ class Hitomi(
             }
 
             val results = when {
-                positiveTerms.isEmpty() || sortBy != Pair(null, "index")
-                -> getGalleryIDsFromNozomi(sortBy.first, sortBy.second, language)
+                positiveTerms.isEmpty() ||
+                    queryMode == QueryMode.OR ||
+                    sortBy != Pair(null, "index") ->
+                    getGalleryIDsFromNozomi(sortBy.first, sortBy.second, language)
+
                 else -> emptySet()
             }.toMutableSet()
 
@@ -247,8 +265,12 @@ class Hitomi(
             }
 
             // positive results
-            positiveResults.forEach {
-                filterPositive(it.await())
+            when (queryMode) {
+                QueryMode.AND -> positiveResults.forEach {
+                    filterPositive(it.await())
+                }
+
+                QueryMode.OR -> filterPositive(positiveResults.flatMap { it.await() }.toSet())
             }
 
             // negative results
@@ -258,6 +280,8 @@ class Hitomi(
 
             if (random) {
                 results.toList().shuffled()
+            } else if (ascending) {
+                results.toList().reversed()
             } else {
                 results.toList()
             }
@@ -514,9 +538,21 @@ class Hitomi(
     private fun Gallery.toSManga() = SManga.create().apply {
         title = this@toSManga.title
         url = galleryurl
-        author = groups?.joinToString { it.formatted } ?: artists?.joinToString { it.formatted }
+        author = groups?.joinToString { it.formatted }
         artist = artists?.joinToString { it.formatted }
-        genre = tags?.joinToString { it.formatted }
+        genre = (
+            artists?.tagAll().orEmpty() +
+                groups?.tagAll().orEmpty() +
+                type?.let {
+                    listOf("Type:" + (galleryType[it] ?: it))
+                }.orEmpty() +
+                language?.let {
+                    listOf("Language:" + it.replaceFirstChar { ch -> ch.uppercase() })
+                }.orEmpty() +
+                parodys?.tagAll().orEmpty() +
+                characters?.tagAll().orEmpty() +
+                tags?.tagAll()?.sorted().orEmpty()
+            ).joinToString()
         thumbnail_url = files.first().let {
             HttpUrl.Builder().apply {
                 scheme("https")
@@ -527,18 +563,8 @@ class Hitomi(
             }.toString()
         }
         description = buildString {
-            japaneseTitle?.let {
-                append("Japanese title: ", it, "\n")
-            }
-            parodys?.joinToString { it.formatted }?.let {
-                append("Series: ", it, "\n")
-            }
-            characters?.joinToString { it.formatted }?.let {
-                append("Characters: ", it, "\n")
-            }
-            append("Type: ", type, "\n")
-            append("Pages: ", files.size, "\n")
-            language?.let { append("Language: ", language) }
+            append("Gallery ID: ${id.content}")
+            if (!japaneseTitle.isNullOrBlank()) append("\nJapanese Title: $japaneseTitle")
         }
         status = SManga.COMPLETED
         update_strategy = UpdateStrategy.ONLY_FETCH_ONCE
@@ -568,7 +594,7 @@ class Hitomi(
             SChapter.create().apply {
                 name = "Chapter"
                 url = gallery.galleryurl
-                scanlator = gallery.type
+                scanlator = "${gallery.files.size} Pages"
                 date_upload = dateFormat.tryParse(gallery.date.substringBeforeLast("-"))
             },
         )
@@ -588,9 +614,6 @@ class Hitomi(
 
     override fun pageListParse(response: Response): List<Page> {
         val gallery = response.parseScriptAs<Gallery>()
-        val id = gallery.galleryurl
-            .substringAfterLast("-")
-            .substringBefore(".")
 
         return gallery.files.mapIndexed { idx, img ->
             // actual logic in imageUrlInterceptor
@@ -603,7 +626,7 @@ class Hitomi(
 
             Page(
                 idx,
-                "$baseUrl/reader/$id.html",
+                "$baseUrl/reader/${gallery.id.content}.html",
                 imageUrl,
             )
         }
@@ -687,6 +710,19 @@ class Hitomi(
         return hash.replace(Regex("""^.*(..)(.)$"""), "$2/$1")
     }
 
+    // subdomain_from_url <-- common.js
+    private fun subDomainFromOffset(offset: Int, ext: String, isThumb: Boolean): String {
+        return if (isThumb) {
+            (97 + offset).toChar() + "tn"
+        } else {
+            when (ext) {
+                "webp" -> "w"
+                "avif" -> "a"
+                else -> ""
+            } + (1 + offset).toString()
+        }
+    }
+
     private fun imageUrlInterceptor(chain: Interceptor.Chain): Response {
         val request = chain.request()
         if (request.url.host != IMAGE_LOOPBACK_HOST) {
@@ -694,31 +730,20 @@ class Hitomi(
         }
 
         val hash = request.url.fragment!!
-        val isThumbnail = request.url.queryParameter(IMAGE_THUMBNAIL) == "true"
+        val isThumb = request.url.queryParameter(IMAGE_THUMBNAIL) == "true"
         val isGif = request.url.queryParameter(IMAGE_GIF) == "true"
-
-        val type = if (isGif) {
-            "webp"
-        } else {
-            "avif"
-        }
+        val ext = if (isGif) "webp" else "avif"
         val imageId = imageIdFromHash(hash)
         val subDomainOffset = runBlocking { subdomainOffset(imageId) }
+        val subDomain = subDomainFromOffset(subDomainOffset, ext, isThumb)
 
-        val imageUrl = if (isThumbnail) {
-            val subDomain = "${'a' + subDomainOffset}tn"
-
-            "https://$subDomain.$cdnDomain/${type}bigtn/${thumbPathFromHash(hash)}/$hash.$type"
-        } else {
-            val commonId = runBlocking { commonImageId() }
-            val subDomain = if (isGif) {
-                "w${subDomainOffset + 1}"
+        val imageUrl =
+            if (isThumb) {
+                "https://$subDomain.$cdnDomain/${ext}bigtn/${thumbPathFromHash(hash)}/$hash.$ext"
             } else {
-                "a${subDomainOffset + 1}"
+                val commonId = runBlocking { commonImageId() }
+                "https://$subDomain.$cdnDomain/$commonId$imageId/$hash.$ext"
             }
-
-            "https://$subDomain.$cdnDomain/$commonId$imageId/$hash.$type"
-        }
 
         val newRequest = request.newBuilder()
             .url(imageUrl)
