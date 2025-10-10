@@ -158,9 +158,19 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
             url.addQueryParameter("library_id", defaultLibraries.joinToString(","))
         }
 
+        var tagSep = ","
+        val tagFilters = mutableListOf<TextFilter>()
         filterList.forEach { filter ->
             when (filter) {
                 is UriFilter -> filter.addToUri(url)
+                is TextFilter -> {
+                    if (filter.state.isNotEmpty()) {
+                        when (filter.type) {
+                            "sep" -> tagSep = filter.state
+                            else -> tagFilters += filter
+                        }
+                    }
+                }
                 is Filter.Sort -> {
                     val state = filter.state ?: return@forEach
 
@@ -182,6 +192,21 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
             }
         }
 
+        for (tags in tagFilters) {
+            tags.state.split(tagSep).filter(String::isNotBlank).forEach { tag ->
+                val trimmed = tag.trim()
+                val (name, value) = when {
+                    tags.type.startsWith("author:") -> Pair(
+                        "author",
+                        "$trimmed," + tags.type.substringAfter("author:"),
+                    )
+
+                    tags.type == "language" -> Pair(tags.type, codeFromLang(trimmed, trimmed))
+                    else -> Pair(tags.type, trimmed)
+                }
+                url.addQueryParameter(name, value)
+            }
+        }
         return GET(url.build(), headers)
     }
 
@@ -261,7 +286,7 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
                     chapter_number = if (!isFromReadList) book.metadata.numberSort else index + 1F
                     url = "$baseUrl/api/v1/books/${book.id}"
                     name = book.getChapterName(chapterNameTemplate, isFromReadList)
-                    scanlator = if (isFromReadList) "" else book.getChapterName("{pages} Pages · {size}", false)
+                    scanlator = if (isFromReadList) "" else book.getChapterName("{pages} Pages - {size}", false)
                     date_upload = when {
                         book.metadata.releaseDate != null -> parseDate(book.metadata.releaseDate)
                         book.created != null -> parseDateTime(book.created)
@@ -357,6 +382,16 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
 
             addAll(authors.map { (role, authors) -> AuthorGroup(role, authors.map { AuthorFilter(it) }) })
             add(SeriesSort())
+            add(Filter.Separator())
+            add(TextFilter("Genres", "genre"))
+            add(TextFilter("Tags", "tag"))
+            add(TextFilter("Publishers", "publisher"))
+            add(TextFilter("Languages", "language"))
+            add(TextFilter("Writers", "author:writer"))
+            add(TextFilter("Pencillers", "author:penciller"))
+            add(Filter.Separator())
+            add(Filter.Header("Default to comma (,) if empty"))
+            add(TextFilter("Tags Separator", "sep"))
         }
 
         return FilterList(filters)

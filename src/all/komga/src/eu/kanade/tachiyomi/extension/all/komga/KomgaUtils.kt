@@ -48,11 +48,16 @@ private val langISOMap = mapOf<String, String>(
     "zh" to "Chinese",
 )
 
-fun langFromCode(code: String, def: String = "Other"): String =
-    langISOMap.filterKeys { it == code }.values.firstOrNull() ?: def
+fun langFromCode(code: String, def: String = "Other") = langISOMap.getOrElse(code) { def }
 
-fun codeFromLang(lang: String, def: String = "N/A"): String =
-    langISOMap.filterValues { it == lang }.keys.firstOrNull() ?: def
+fun codeFromLang(lang: String, def: String = "N/A"): String {
+    for ((k, v) in langISOMap) {
+        if (v.lowercase() == lang.lowercase()) {
+            return k
+        }
+    }
+    return def
+}
 
 fun parseDate(date: String): Long = try {
     formatterDate.parse(date)!!.time

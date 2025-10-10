@@ -1,11 +1,7 @@
 package eu.kanade.tachiyomi.extension.all.komga.dto
 
 import eu.kanade.tachiyomi.extension.all.komga.langFromCode
-import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.await
 import eu.kanade.tachiyomi.source.model.SManga
-import kotlinx.coroutines.async
-import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import org.apache.commons.text.StringSubstitutor
 
@@ -41,6 +37,7 @@ class SeriesDto(
         SManga.create().apply {
             val lang = langFromCode(metadata.language, metadata.language)
             val tags = metadata.tags + booksMetadata.tags
+
             title = metadata.title
             url = "$baseUrl/api/v1/series/$id"
             thumbnail_url = "$url/thumbnail"
@@ -52,12 +49,12 @@ class SeriesDto(
                 metadata.status == "HIATUS" -> SManga.ON_HIATUS
                 else -> SManga.UNKNOWN
             }
-            genre = (
-                collections.map { "Collection:${it.name}" } +
-                    (if (lang.isBlank()) emptyList() else listOf("Language:$lang")) +
-                    metadata.genres.tagAll("Genre:") +
-                    tags.sorted().distinct().tagAll("Tag:")
-                ).joinToString()
+            genre = buildList {
+                collections.sortedBy { it.name }.forEach { add("Collection:${it.name}") }
+                if (!lang.isBlank()) add("Language:$lang")
+                metadata.genres.sorted().forEach { add(it.tagWith("Genre:")) }
+                tags.sorted().distinct().forEach { add(it.tagWith("Tag:")) }
+            }.joinToString()
             description = metadata.summary.ifBlank { booksMetadata.summary }
             booksMetadata.authors.groupBy({ it.role }, { it.name }).let { map ->
                 author = map["writer"]?.distinct()?.joinToString()
@@ -126,6 +123,7 @@ class BookDto(
             "releaseDate" to metadata.releaseDate,
             "size" to size,
             "sizeBytes" to sizeBytes.toString(),
+            "pages" to media.pagesCount.toString(),
         )
         val sub = StringSubstitutor(values, "{", "}")
 
@@ -240,4 +238,4 @@ private fun String.toCamelCase(): String {
     return result.toString()
 }
 
-private fun Iterable<String>.tagAll(prefix: String) = this.map { prefix + it.toCamelCase() }
+private fun String.tagWith(prefix: String) = prefix + this.toCamelCase()
