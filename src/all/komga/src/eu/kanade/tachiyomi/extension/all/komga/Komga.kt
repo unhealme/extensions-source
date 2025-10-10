@@ -31,6 +31,7 @@ import keiyoushi.utils.getPreferencesLazy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import okhttp3.Credentials
@@ -77,6 +78,8 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
     private val password by lazy { preferences.getString(PREF_PASSWORD, "")!! }
 
     private val apiKey by lazy { preferences.getString(PREF_API_KEY, "")!! }
+
+    private val pageSize by lazy { preferences.getString(PREF_PAGE_SIZE, "")!! }
 
     private val defaultLibraries
         get() = preferences.getStringSet(PREF_DEFAULT_LIBRARIES, emptySet())!!
@@ -145,6 +148,7 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
             .addPathSegments(type)
             .addQueryParameter("search", query)
             .addQueryParameter("page", (page - 1).toString())
+            .addQueryParameter("size", pageSize)
             .addQueryParameter("deleted", "false")
 
         val filterList = filters.ifEmpty { getFilterList() }
@@ -206,7 +210,12 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
         } else if (response.isFromBook()) {
             response.parseAs<BookDto>().toSManga(baseUrl)
         } else {
-            response.parseAs<SeriesDto>().toSManga(baseUrl)
+            val series = response.parseAs<SeriesDto>()
+            val collections = runBlocking {
+                client.newCall(GET("$baseUrl/api/v1/series/${series.id}/collections")).await()
+                    .parseAs<List<CollectionDto>>()
+            }
+            series.toCompleteSManga(baseUrl, collections)
         }
     }
 
@@ -252,9 +261,7 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
                     chapter_number = if (!isFromReadList) book.metadata.numberSort else index + 1F
                     url = "$baseUrl/api/v1/books/${book.id}"
                     name = book.getChapterName(chapterNameTemplate, isFromReadList)
-                    scanlator = book.metadata.authors
-                        .filter { it.role == "translator" }
-                        .joinToString { it.name }
+                    scanlator = if (isFromReadList) "" else book.getChapterName("{pages} Pages · {size}", false)
                     date_upload = when {
                         book.metadata.releaseDate != null -> parseDate(book.metadata.releaseDate)
                         book.created != null -> parseDateTime(book.created)
@@ -330,6 +337,11 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
                 "Publishers",
                 "publisher",
                 publishers.map { UriMultiSelectOption(it) },
+            ),
+            UriMultiSelectFilter(
+                "Languages",
+                "language",
+                languages.map { UriMultiSelectOption(langFromCode(it, "Unknown"), it) },
             ),
         ).apply {
             if (fetchFilterStatus != FetchFilterStatus.FETCHED) {
@@ -414,6 +426,21 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
                 restartRequired = true,
             )
         }
+        screen.addEditTextPreference(
+            title = "Items per Page",
+            default = "20",
+            summary = pageSize.ifBlank { "20" },
+            inputType = InputType.TYPE_CLASS_NUMBER,
+            validate = {
+                when (val page = it.toIntOrNull(10)) {
+                    is Int -> page > 0
+                    else -> false
+                }
+            },
+            validationMessage = "Page must be a number more than 0",
+            key = PREF_PAGE_SIZE,
+            restartRequired = true,
+        )
 
         MultiSelectListPreference(screen.context).apply {
             key = PREF_DEFAULT_LIBRARIES
@@ -478,6 +505,7 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
     private var genres = emptySet<String>()
     private var tags = emptySet<String>()
     private var publishers = emptySet<String>()
+    private var languages = emptySet<String>()
     private var authors = emptyMap<String, List<AuthorDto>>() // roles to list of authors
 
     private var fetchFilterStatus = FetchFilterStatus.NOT_FETCHED
@@ -503,6 +531,7 @@ open class Komga(private val suffix: String = "") : ConfigurableSource, Unmetere
                 genres = client.newCall(GET("$baseUrl/api/v1/genres", headers)).await().parseAs()
                 tags = client.newCall(GET("$baseUrl/api/v1/tags", headers)).await().parseAs()
                 publishers = client.newCall(GET("$baseUrl/api/v1/publishers", headers)).await().parseAs()
+                languages = client.newCall(GET("$baseUrl/api/v1/languages")).await().parseAs()
                 authors = client
                     .newCall(GET("$baseUrl/api/v1/authors", headers))
                     .await()
@@ -552,8 +581,9 @@ private const val PREF_ADDRESS = "Address"
 private const val PREF_USERNAME = "Username"
 private const val PREF_PASSWORD = "Password"
 private const val PREF_API_KEY = "API key"
+private const val PREF_PAGE_SIZE = "Number of items per page to fetch"
 private const val PREF_DEFAULT_LIBRARIES = "Default libraries"
 private const val PREF_CHAPTER_NAME_TEMPLATE = "Chapter name template"
-private const val PREF_CHAPTER_NAME_TEMPLATE_DEFAULT = "{number} - {title} ({size})"
+private const val PREF_CHAPTER_NAME_TEMPLATE_DEFAULT = "{number} - {title}"
 
 private val SUPPORTED_IMAGE_TYPES = listOf("image/jpeg", "image/png", "image/gif", "image/webp", "image/jxl", "image/heif", "image/avif")

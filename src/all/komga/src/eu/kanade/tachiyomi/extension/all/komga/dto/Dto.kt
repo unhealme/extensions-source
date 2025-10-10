@@ -1,6 +1,11 @@
 package eu.kanade.tachiyomi.extension.all.komga.dto
 
+import eu.kanade.tachiyomi.extension.all.komga.langFromCode
+import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.await
 import eu.kanade.tachiyomi.source.model.SManga
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import org.apache.commons.text.StringSubstitutor
 
@@ -30,21 +35,35 @@ class SeriesDto(
         title = metadata.title
         url = "$baseUrl/api/v1/series/$id"
         thumbnail_url = "$url/thumbnail"
-        status = when {
-            metadata.status == "ENDED" && metadata.totalBookCount != null && booksCount < metadata.totalBookCount -> SManga.PUBLISHING_FINISHED
-            metadata.status == "ENDED" -> SManga.COMPLETED
-            metadata.status == "ONGOING" -> SManga.ONGOING
-            metadata.status == "ABANDONED" -> SManga.CANCELLED
-            metadata.status == "HIATUS" -> SManga.ON_HIATUS
-            else -> SManga.UNKNOWN
-        }
-        genre = (metadata.genres + metadata.tags + booksMetadata.tags).sorted().distinct().joinToString(", ")
-        description = metadata.summary.ifBlank { booksMetadata.summary }
-        booksMetadata.authors.groupBy({ it.role }, { it.name }).let { map ->
-            author = map["writer"]?.distinct()?.joinToString()
-            artist = map["penciller"]?.distinct()?.joinToString()
-        }
     }
+
+    fun toCompleteSManga(baseUrl: String, collections: Iterable<CollectionDto>) =
+        SManga.create().apply {
+            val lang = langFromCode(metadata.language, metadata.language)
+            val tags = metadata.tags + booksMetadata.tags
+            title = metadata.title
+            url = "$baseUrl/api/v1/series/$id"
+            thumbnail_url = "$url/thumbnail"
+            status = when {
+                metadata.status == "ENDED" && metadata.totalBookCount != null && booksCount < metadata.totalBookCount -> SManga.PUBLISHING_FINISHED
+                metadata.status == "ENDED" -> SManga.COMPLETED
+                metadata.status == "ONGOING" -> SManga.ONGOING
+                metadata.status == "ABANDONED" -> SManga.CANCELLED
+                metadata.status == "HIATUS" -> SManga.ON_HIATUS
+                else -> SManga.UNKNOWN
+            }
+            genre = (
+                collections.map { "Collection:${it.name}" } +
+                    if (lang.isBlank()) emptyList() else listOf("Language:$lang") +
+                        metadata.genres.tagAll("Genre:") +
+                        tags.sorted().distinct().tagAll("Tag:")
+                ).joinToString()
+            description = metadata.summary.ifBlank { booksMetadata.summary }
+            booksMetadata.authors.groupBy({ it.role }, { it.name }).let { map ->
+                author = map["writer"]?.distinct()?.joinToString()
+                artist = map["penciller"]?.distinct()?.joinToString()
+            }
+        }
 }
 
 @Serializable
@@ -201,3 +220,24 @@ class ReadListDto(
         status = SManga.UNKNOWN
     }
 }
+
+private fun String.toCamelCase(): String {
+    val result = StringBuilder(length)
+    var capitalize = true
+    for (char in this) {
+        if (char.isUpperCase()) {
+            return this
+        }
+        result.append(
+            if (capitalize) {
+                char.uppercase()
+            } else {
+                char.lowercase()
+            },
+        )
+        capitalize = char.isWhitespace()
+    }
+    return result.toString()
+}
+
+private fun Iterable<String>.tagAll(prefix: String) = this.map { prefix + it.toCamelCase() }
