@@ -32,7 +32,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
-import java.util.LinkedHashSet
 import java.util.LinkedList
 import java.util.Locale
 import kotlin.math.min
@@ -540,19 +539,15 @@ class Hitomi(
         url = galleryurl
         author = groups?.joinToString { it.formatted }
         artist = artists?.joinToString { it.formatted }
-        genre = (
-            artists?.tagAll().orEmpty() +
-                groups?.tagAll().orEmpty() +
-                type?.let {
-                    listOf("Type:" + (galleryType[it] ?: it))
-                }.orEmpty() +
-                language?.let {
-                    listOf("Language:" + it.replaceFirstChar { ch -> ch.uppercase() })
-                }.orEmpty() +
-                parodys?.tagAll().orEmpty() +
-                characters?.tagAll().orEmpty() +
-                tags?.tagAll()?.sorted().orEmpty()
-            ).joinToString()
+        genre = buildList {
+            artists?.tagAll()?.forEach { add(it) }
+            groups?.tagAll()?.forEach { add(it) }
+            type?.let { add("Type:" + galleryType.getOrElse(it) { it }) }
+            language?.let { add("Language:" + it.replaceFirstChar { ch -> ch.uppercase() }) }
+            parodys?.tagAll()?.forEach { add(it) }
+            characters?.tagAll()?.forEach { add(it) }
+            tags?.tagAll()?.sorted()?.forEach { add(it) }
+        }.joinToString()
         thumbnail_url = files.first().let {
             HttpUrl.Builder().apply {
                 scheme("https")
