@@ -54,9 +54,9 @@ class SeriesDto(
             }
             genre = (
                 collections.map { "Collection:${it.name}" } +
-                    if (lang.isBlank()) emptyList() else listOf("Language:$lang") +
-                        metadata.genres.tagAll("Genre:") +
-                        tags.sorted().distinct().tagAll("Tag:")
+                    (if (lang.isBlank()) emptyList() else listOf("Language:$lang")) +
+                    metadata.genres.tagAll("Genre:") +
+                    tags.sorted().distinct().tagAll("Tag:")
                 ).joinToString()
             description = metadata.summary.ifBlank { booksMetadata.summary }
             booksMetadata.authors.groupBy({ it.role }, { it.name }).let { map ->
