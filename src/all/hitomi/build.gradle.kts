@@ -1,3 +1,5 @@
+import io.github.keiyoushi.gradle.api.ContentWarning
+
 plugins {
     alias(kei.plugins.extension)
 }
@@ -16,7 +18,6 @@ keiyoushi {
         source {
             lang = it
             baseUrl = "https://hitomi.la"
-            versionId = 2
         }
     }
 }
