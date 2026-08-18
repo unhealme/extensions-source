@@ -42,8 +42,8 @@ import kotlin.time.Duration.Companion.seconds
 @Source
 abstract class Hitomi : HttpSource() {
     private val cdnDomain = "gold-usergeneratedcontent.net"
-    private val nozomiLang: String
-        get() = when (lang) {
+    private val nozomiLang: String by lazy {
+        when (lang) {
             "all" -> "all"
             "en" -> "english"
             "id" -> "indonesian"
@@ -72,6 +72,7 @@ abstract class Hitomi : HttpSource() {
             "ja" -> "japanese"
             else -> lang
         }
+    }
     private val ltnUrl = "https://ltn.$cdnDomain"
     override val supportsLatest = true
     override val client = network.client.newBuilder()
