@@ -40,15 +40,16 @@ class Tag(
     private val male: JsonPrimitive?,
     private val tag: String,
 ) : HasTagForm {
-    override val tagged get() = (
-        if (female?.content == "1") {
-            "Female:"
-        } else if (male?.content == "1") {
-            "Male:"
-        } else {
-            "Tag:"
-        }
-        ) + tag.toCamelCase()
+    override val tagged
+        get() = (
+            if (female?.content == "1") {
+                "Female:"
+            } else if (male?.content == "1") {
+                "Male:"
+            } else {
+                "Tag:"
+            }
+            ) + tag.toCamelCase()
 }
 
 @Serializable
@@ -94,7 +95,7 @@ private fun String.toCamelCase(): String {
                 char.lowercase()
             },
         )
-        capitalize = char.isWhitespace()
+        capitalize = char.isWhitespace() or (char in ":.+-!/\\")
     }
     return result.toString()
 }
