@@ -17,6 +17,49 @@ fun parseDate(date: String) = formatterDate.tryParseDate(date).takeIf {
     it != 0L
 } ?: Instant.tryParse(date)
 
+private val langISOMap = mapOf<String, String>(
+    "ar" to "Arabic",
+    "bg" to "Bulgarian",
+    "ca" to "Catalan",
+    "cs" to "Czech",
+    "da" to "Danish",
+    "de" to "German",
+    "el" to "Greek",
+    "en" to "English",
+    "es" to "Spanish",
+    "fi" to "Finnish",
+    "fr" to "French",
+    "he" to "Hebrew",
+    "hu" to "Hungarian",
+    "id" to "Indonesian",
+    "it" to "Italian",
+    "ja" to "Japanese",
+    "ko" to "Korean",
+    "ms" to "Malay",
+    "nl" to "Dutch",
+    "no" to "Norwegian",
+    "pl" to "Polish",
+    "pt" to "Portuguese",
+    "ro" to "Romanian",
+    "ru" to "Russian",
+    "sv" to "Swedish",
+    "th" to "Thai",
+    "tr" to "Turkish",
+    "vi" to "Vietnamese",
+    "zh" to "Chinese",
+)
+
+fun langFromCode(code: String, def: String = "Other") = langISOMap.getOrElse(code) { def }
+
+fun codeFromLang(lang: String, def: String = "N/A"): String {
+    for ((k, v) in langISOMap) {
+        if (v.equals(lang, ignoreCase = true)) {
+            return k
+        }
+    }
+    return def
+}
+
 fun PreferenceScreen.addEditTextPreference(
     title: String,
     default: String,

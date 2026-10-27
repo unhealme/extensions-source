@@ -86,6 +86,9 @@ class Komga(
     private val apiKey
         get() = preferences.getString(PREF_API_KEY, "")!!
 
+    private val pageSize
+        get() = preferences.getString(PREF_PAGE_SIZE, "")!!
+
     private val defaultLibraries
         get() = preferences.getStringSet(PREF_DEFAULT_LIBRARIES, emptySet())!!
 
@@ -152,6 +155,7 @@ class Komga(
             .addPathSegments(type)
             .addQueryParameter("search", query)
             .addQueryParameter("page", (page - 1).toString())
+            .addQueryParameter("size", pageSize)
             .addQueryParameter("deleted", "false")
 
         val filterList = filters.ifEmpty { getFilterList() }
@@ -161,9 +165,20 @@ class Komga(
             url.addQueryParameter("library_id", defaultLibraries.joinToString(","))
         }
 
+        var tagSep = ","
+        val tagFilters = mutableListOf<TextFilter>()
         filterList.forEach { filter ->
             when (filter) {
                 is UriFilter -> filter.addToUri(url)
+
+                is TextFilter -> {
+                    if (filter.state.isNotEmpty()) {
+                        when (filter.type) {
+                            "sep" -> tagSep = filter.state
+                            else -> tagFilters += filter
+                        }
+                    }
+                }
 
                 is Filter.Sort -> {
                     val state = filter.state ?: return@forEach
@@ -173,7 +188,10 @@ class Komga(
                         1 -> if (type == "series") "metadata.titleSort" else "name"
                         2 -> "createdDate"
                         3 -> "lastModifiedDate"
-                        4 -> "random"
+                        4 -> "booksMetadata.releaseDate"
+                        5 -> "booksCount"
+                        6 -> "name"
+                        7 -> "random"
                         else -> return@forEach
                     } + "," + if (state.ascending) "asc" else "desc"
 
@@ -184,6 +202,21 @@ class Komga(
             }
         }
 
+        tagFilters.forEach { tags ->
+            tags.state.split(tagSep).filter(String::isNotBlank).forEach { tag ->
+                val trimmed = tag.trim()
+                val (name, value) = when {
+                    tags.type.startsWith("author:") -> Pair(
+                        "author",
+                        "$trimmed," + tags.type.substringAfter("author:"),
+                    )
+
+                    tags.type == "language" -> Pair(tags.type, codeFromLang(trimmed, trimmed))
+                    else -> Pair(tags.type, trimmed)
+                }
+                url.addQueryParameter(name, value)
+            }
+        }
         return url.build().toString()
     }
 
@@ -229,7 +262,10 @@ class Komga(
         } else if (response.isFromBook()) {
             response.parseAs<BookDto>().toSManga(baseUrl)
         } else {
-            response.parseAs<SeriesDto>().toSManga(baseUrl)
+            response.parseAs<SeriesDto>().let {
+                val collections = client.get("$baseUrl/api/v1/series/${it.id}/collections").parseAs<List<CollectionDto>>()
+                it.toCompleteSManga(baseUrl, collections)
+            }
         }
     }
 
@@ -280,9 +316,7 @@ class Komga(
                     chapter_number = if (!isFromReadList) book.metadata.numberSort else index + 1F
                     this.url = "$baseUrl/api/v1/books/${book.id}"
                     name = book.getChapterName(chapterNameTemplate, isFromReadList, manga.title)
-                    scanlator = book.metadata.authors
-                        .filter { it.role == "translator" }
-                        .joinToString(separator) { it.name }
+                    scanlator = if (isFromReadList) "" else book.getChapterName("{pages} Pages - {size}", false, manga.title)
                     // XXX: `Book.fileLastModified` actually uses the server's running timezone,
                     // not UTC, even if the timestamp ends with a Z! We cannot determine the
                     // server's timezone, which is why this is a last resort option.
@@ -341,11 +375,22 @@ class Komga(
                 Triple("Genres", "genre", filterData?.genres),
                 Triple("Tags", "tag", filterData?.tags),
                 Triple("Publishers", "publisher", filterData?.publishers),
+                Triple("Languages", "language", filterData?.languages?.map { langFromCode(it, "Unknown") }),
             ).forEach { (name, key, values) ->
                 if (!values.isNullOrEmpty()) add(UriMultiSelectFilter(name, key, values.map { UriMultiSelectOption(it) }))
             }
             addAll(filterData?.authors.orEmpty().map { (role, authors) -> AuthorGroup(role, authors.map { AuthorFilter(it) }) })
             add(SeriesSort())
+            add(Filter.Separator())
+            add(TextFilter("Genres", "genre"))
+            add(TextFilter("Tags", "tag"))
+            add(TextFilter("Publishers", "publisher"))
+            add(TextFilter("Languages", "language"))
+            add(TextFilter("Writers", "author:writer"))
+            add(TextFilter("Pencillers", "author:penciller"))
+            add(Filter.Separator())
+            add(Filter.Header("Default to comma (,) if empty"))
+            add(TextFilter("Tags Separator", "sep"))
         }
 
         return FilterList(filters)
@@ -503,6 +548,21 @@ class Komga(
 
         screen.addPreference(defaultLibraryPref)
 
+        screen.addEditTextPreference(
+            title = "Items per Page",
+            default = "20",
+            summary = pageSize.ifBlank { "20" },
+            inputType = InputType.TYPE_CLASS_NUMBER,
+            validate = {
+                when (val page = it.toIntOrNull(10)) {
+                    is Int -> page > 0
+                    else -> false
+                }
+            },
+            validationMessage = "Page must be a number more than 0",
+            key = PREF_PAGE_SIZE,
+        )
+
         val values = hashMapOf(
             "title" to "",
             "seriesTitle" to "",
@@ -563,6 +623,7 @@ class Komga(
         val genres: Set<String>,
         val tags: Set<String>,
         val publishers: Set<String>,
+        val languages: Set<String>,
         val authors: Map<String, List<AuthorDto>>, // roles to list of authors
     )
 
@@ -572,6 +633,7 @@ class Komga(
         val genres = async { client.get("$baseUrl/api/v1/genres").parseAs<Set<String>>() }
         val tags = async { client.get("$baseUrl/api/v1/tags").parseAs<Set<String>>() }
         val publishers = async { client.get("$baseUrl/api/v1/publishers").parseAs<Set<String>>() }
+        val languages = async { client.get("$baseUrl/api/v1/languages").parseAs<Set<String>>() }
         val authors = async { client.get("$baseUrl/api/v1/authors").parseAs<List<AuthorDto>>().groupBy { it.role } }
 
         FilterData(
@@ -580,6 +642,7 @@ class Komga(
             genres = genres.await(),
             tags = tags.await(),
             publishers = publishers.await(),
+            languages = languages.await(),
             authors = authors.await(),
         ).toJsonElement()
     }
@@ -608,9 +671,10 @@ private const val PREF_USERNAME = "Username"
 private const val PREF_PASSWORD = "Password"
 private const val PREF_API_KEY = "API key"
 private const val PREF_LIBRARY_LIST = "library_list"
+private const val PREF_PAGE_SIZE = "Number of items per page to fetch"
 private const val PREF_DEFAULT_LIBRARIES = "Default libraries"
 private const val PREF_CHAPTER_NAME_TEMPLATE = "Chapter name template"
-private const val PREF_CHAPTER_NAME_TEMPLATE_DEFAULT = "{number} - {title} ({size})"
+private const val PREF_CHAPTER_NAME_TEMPLATE_DEFAULT = "{number} - {title}"
 private const val PREF_SCANLATOR_SEP = "Scanlator seperator"
 private const val PREF_SCANLATOR_SEP_DEFAULT = ","
 

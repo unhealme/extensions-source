@@ -1,7 +1,5 @@
 package eu.kanade.tachiyomi.extension.all.komga
 
-import eu.kanade.tachiyomi.extension.all.komga.AuthorDto
-import eu.kanade.tachiyomi.extension.all.komga.LibraryDto
 import eu.kanade.tachiyomi.source.model.Filter
 import okhttp3.HttpUrl
 
@@ -22,7 +20,16 @@ internal class TypeSelect :
 internal class SeriesSort(selection: Selection? = null) :
     Filter.Sort(
         "Sort",
-        arrayOf("Relevance", "Alphabetically", "Date added", "Date updated", "Random"),
+        arrayOf(
+            "Relevance",
+            "Alphabetically",
+            "Date added",
+            "Date updated",
+            "Release date",
+            "Books count",
+            "Folder name",
+            "Random",
+        ),
         selection ?: Selection(0, true),
     )
 
@@ -114,3 +121,5 @@ internal class CollectionSelect(
 ) : Filter.Select<String>("Collection", collections.map { it.name }.toTypedArray())
 
 internal data class CollectionFilterEntry(val name: String, val id: String? = null)
+
+internal class TextFilter(name: String, val type: String) : Filter.Text(name)

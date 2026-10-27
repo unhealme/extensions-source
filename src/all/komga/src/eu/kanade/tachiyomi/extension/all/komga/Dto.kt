@@ -43,6 +43,15 @@ class SeriesDto(
         title = metadata.title
         url = "$baseUrl/api/v1/series/$id"
         thumbnail_url = "$url/thumbnail"
+    }
+
+    fun toCompleteSManga(baseUrl: String, collections: Iterable<CollectionDto>) = SManga.create().apply {
+        val lang = langFromCode(metadata.language, metadata.language)
+        val tags = metadata.tags + booksMetadata.tags
+
+        title = metadata.title
+        url = "$baseUrl/api/v1/series/$id"
+        thumbnail_url = "$url/thumbnail"
         status = when {
             metadata.status == "ENDED" && metadata.totalBookCount != null && booksCount < metadata.totalBookCount -> SManga.PUBLISHING_FINISHED
             metadata.status == "ENDED" -> SManga.COMPLETED
@@ -51,7 +60,13 @@ class SeriesDto(
             metadata.status == "HIATUS" -> SManga.ON_HIATUS
             else -> SManga.UNKNOWN
         }
-        genre = (metadata.genres + metadata.tags + booksMetadata.tags).sorted().distinct().joinToString(", ")
+        genre = buildList {
+            collections.sortedBy { it.name }.forEach { add("Collection:${it.name}") }
+            if (lang.isNotBlank()) add("Language:$lang")
+            val genres = metadata.genres.map { if (it.contains(':')) it.toCamelCase() else it.tagWith("Genre:") }
+            val tags = tags.map { if (it.contains(':')) it.toCamelCase() else it.tagWith("Tag:") }
+            (genres + tags).sorted().distinct().forEach { add(it) }
+        }.joinToString()
         description = metadata.summary.ifBlank { booksMetadata.summary }
         booksMetadata.authors.groupBy({ it.role }, { it.name }).let { map ->
             author = map["writer"]?.distinct()?.joinToString()
@@ -91,7 +106,6 @@ class BookMetadataAggregationDto(
     val releaseDate: String?,
     val summary: String,
     val summaryNumber: String,
-
     val created: String,
     val lastModified: String,
 )
@@ -120,6 +134,7 @@ class BookDto(
             "releaseDate" to metadata.releaseDate,
             "size" to size,
             "sizeBytes" to sizeBytes.toString(),
+            "pages" to media.pagesCount.toString(),
         )
         val sub = StringSubstitutor(values, "{", "}")
 
@@ -216,3 +231,24 @@ class ReadListDto(
         status = SManga.UNKNOWN
     }
 }
+
+private fun String.toCamelCase(): String {
+    val result = StringBuilder(length)
+    var capitalize = true
+    for (char in this) {
+        if (char.isUpperCase()) {
+            return this
+        }
+        result.append(
+            if (capitalize) {
+                char.uppercase()
+            } else {
+                char.lowercase()
+            },
+        )
+        capitalize = char.isWhitespace() or (char in ":.+-!/\\")
+    }
+    return result.toString()
+}
+
+private fun String.tagWith(prefix: String) = prefix + this.toCamelCase()
