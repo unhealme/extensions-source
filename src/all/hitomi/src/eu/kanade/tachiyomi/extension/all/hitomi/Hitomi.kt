@@ -683,7 +683,7 @@ abstract class Hitomi : KeiSource() {
                 subdomainOffsetMap[case] = o
             }
 
-            commonImageId = Regex("b: '(.+)'").find(ggScript)!!.groupValues[1]
+            commonImageId = Regex("b: '(.+)'").find(ggScript)!!.groupValues[1].trim('/')
 
             scriptLastRetrieval = System.currentTimeMillis()
         }
